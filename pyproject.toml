@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pos_tablet"
+version = "0.0.1"
+description = "Suprime o teclado virtual do POS do ERPNext em tablets"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["pos_tablet", "pos_tablet.config", "pos_tablet.pos_tablet"]

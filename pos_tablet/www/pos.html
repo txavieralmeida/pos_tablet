@@ -267,6 +267,7 @@ updateCashUI();
   try{
     const resp=await api('pos_tablet.api.get_pos_items');
     if(resp && resp.error==='no_pos_profile'){ showGridMsg('⚠ '+resp.message); return; }
+    try{ await POSPrint.setLogo(resp && resp.logo); }catch(e){}
     ITEMS=(resp&&resp.items)||[];
     renderGrid();
     if(resp && resp.error==='no_items'){ showGridMsg('⚠ '+resp.message); }

@@ -1,11 +1,11 @@
-// pos_print.js — render + impressão do recibo (partilhado entre /pos e /pos-print).
+// pos_print.js — render + impressão do recibo (partilhado entre /pos e /pos_print).
 // Impressora Tronic 5890 / "Mini Pocket Printer" (BLE, raster). Web Bluetooth.
 window.POSPrint = (function () {
 	"use strict";
 	const SERVICE = 0xff00, CHAR_WRITE = 0xff02, CHAR_NOTIFY = 0xff01, WIDTH = 384, BPR = 48;
 	const CFG_KEY = "pt_print_cfg";
 	const DEFAULT_CFG = { header: "", footer: "Obrigado!", showDate: true, showInvoice: true, density: 1, scale: 1 };
-	let device = null, server = null, writeChar = null, done = false;
+	let device = null, server = null, writeChar = null, done = false, _logo = null;
 	const sleep = ms => new Promise(r => setTimeout(r, ms));
 	const money = n => (Number(n) || 0).toFixed(2).replace(".", ",") + " €";
 
@@ -15,35 +15,91 @@ window.POSPrint = (function () {
 	}
 	function saveCfg(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
 
-	// ---- render do recibo → devolve {canvas, bits, h} ----
+	// carrega o logo (data URI) para uma Image; resolve quando pronto (ou sem logo)
+	function setLogo(dataUri) {
+		return new Promise(res => {
+			if (!dataUri) { _logo = null; return res(); }
+			const im = new Image();
+			im.onload = () => { _logo = im; res(); };
+			im.onerror = () => { _logo = null; res(); };
+			im.src = dataUri;
+		});
+	}
+
+	// quebra texto para caber em maxW (com fallback char-a-char para palavras enormes)
+	function wrap(ctx, text, maxW) {
+		const out = [];
+		let cur = "";
+		String(text).split(/\s+/).filter(Boolean).forEach(word => {
+			let w = word;
+			while (ctx.measureText(w).width > maxW && w.length > 1) {
+				let i = 1;
+				while (i < w.length && ctx.measureText(w.slice(0, i + 1)).width <= maxW) i++;
+				if (cur) { out.push(cur); cur = ""; }
+				out.push(w.slice(0, i));
+				w = w.slice(i);
+			}
+			const t = cur ? cur + " " + w : w;
+			if (ctx.measureText(t).width <= maxW || !cur) cur = t;
+			else { out.push(cur); cur = w; }
+		});
+		if (cur) out.push(cur);
+		return out.length ? out : [""];
+	}
+
+	// render do recibo → devolve {canvas, bits, h}
 	function renderReceipt(doc, cfg) {
 		cfg = cfg || loadCfg();
 		const s = Math.max(0.7, Math.min(1.6, Number(cfg.scale) || 1));
-		const MAXH = 6000, PAD = 8;
+		const MAXH = 8000, PAD = 8, M = 6;
 		const c = document.createElement("canvas"); c.width = WIDTH; c.height = MAXH;
 		const ctx = c.getContext("2d");
 		ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, WIDTH, MAXH);
 		ctx.fillStyle = "#000"; ctx.textBaseline = "top";
 		let y = PAD;
-		const ce = (t, sz, b) => { ctx.font = (b ? "bold " : "") + Math.round(sz * s) + "px monospace"; ctx.textAlign = "center"; ctx.fillText(t || "", WIDTH / 2, y); y += Math.round(sz * s) + 5; };
-		const lf = (t, sz, b) => { ctx.font = (b ? "bold " : "") + Math.round(sz * s) + "px monospace"; ctx.textAlign = "left"; ctx.fillText(t || "", 6, y); y += Math.round(sz * s) + 5; };
-		const lr = (l, r, sz, b) => { ctx.font = (b ? "bold " : "") + Math.round(sz * s) + "px monospace"; ctx.textAlign = "left"; ctx.fillText(l || "", 6, y); ctx.textAlign = "right"; ctx.fillText(r || "", WIDTH - 6, y); y += Math.round(sz * s) + 5; };
-		const hr = () => { y += 3; ctx.fillRect(6, y, WIDTH - 12, 2); y += 9; };
+		const setFont = (sz, b) => { ctx.font = (b ? "bold " : "") + Math.round(sz * s) + "px monospace"; };
+		const lh = sz => Math.round(sz * s) + 5;
+		const center = (text, sz, b) => { setFont(sz, b); ctx.textAlign = "center"; wrap(ctx, text, WIDTH - 2 * M).forEach(l => { ctx.fillText(l, WIDTH / 2, y); y += lh(sz); }); };
+		const left = (text, sz, b) => { setFont(sz, b); ctx.textAlign = "left"; wrap(ctx, text, WIDTH - 2 * M).forEach(l => { ctx.fillText(l, M, y); y += lh(sz); }); };
+		const hr = () => { y += 3; ctx.fillRect(M, y, WIDTH - 2 * M, 2); y += 9; };
 
-		ce(doc.company, 26, true);
-		if (cfg.header) String(cfg.header).split("\n").forEach(l => ce(l, 15, false));
-		ce("Recibo Simplificado", 18, false);
+		// logo (letter head) — desenhado no topo, centrado
+		if (_logo && (_logo.naturalWidth || _logo.width)) {
+			const iw = _logo.naturalWidth || _logo.width, ih = _logo.naturalHeight || _logo.height;
+			let w = Math.min(WIDTH - 40, iw), h = Math.round(w * ih / iw);
+			const capH = 170; if (h > capH) { h = capH; w = Math.round(h * iw / ih); }
+			ctx.drawImage(_logo, Math.round((WIDTH - w) / 2), y, w, h);
+			y += h + 8;
+		}
+
+		center(doc.company, 26, true);                                   // título (com wrap)
+		if (cfg.header) String(cfg.header).split("\n").forEach(l => center(l, 15, false));
+		center("Recibo Simplificado", 18, false);
 		hr();
-		if (cfg.showInvoice && doc.name) lf(doc.name, 16, false);
-		if (cfg.showDate) { const w = ((doc.posting_date || "") + " " + (doc.posting_time || "")).trim(); if (w) lf(w, 16, false); }
-		if ((cfg.showInvoice && doc.name) || cfg.showDate) hr();
+		let meta = false;
+		if (cfg.showInvoice && doc.name) { left(doc.name, 16, false); meta = true; }
+		if (cfg.showDate) { const w = ((doc.posting_date || "") + " " + (doc.posting_time || "")).trim(); if (w) { left(w, 16, false); meta = true; } }
+		if (meta) hr();
+
+		// itens — nome com wrap, preço alinhado na 1ª linha
 		(doc.items || []).forEach(it => {
-			lr((it.qty || 0) + "x " + String(it.item_name || "").substring(0, 20), money(it.amount != null ? it.amount : (it.qty * it.rate)), 20, false);
+			setFont(20, false);
+			const price = money(it.amount != null ? it.amount : (it.qty * it.rate));
+			const priceW = ctx.measureText(price).width;
+			const label = (it.qty || 0) + "x " + String(it.item_name || "");
+			const lines = wrap(ctx, label, WIDTH - 2 * M - priceW - 10);
+			lines.forEach((ln, idx) => {
+				ctx.textAlign = "left"; ctx.fillText(ln, M, y);
+				if (idx === 0) { ctx.textAlign = "right"; ctx.fillText(price, WIDTH - M, y); }
+				y += lh(20);
+			});
 		});
 		hr();
-		lr("TOTAL", money(doc.grand_total), 28, true);
-		if (doc.paid_amount != null) lr("Pago", money(doc.paid_amount), 18, false);
-		if (cfg.footer) { hr(); String(cfg.footer).split("\n").forEach(l => ce(l, 20, true)); }
+
+		setFont(28, true); ctx.textAlign = "left"; ctx.fillText("TOTAL", M, y);
+		ctx.textAlign = "right"; ctx.fillText(money(doc.grand_total), WIDTH - M, y); y += lh(28);
+		if (doc.paid_amount != null) { setFont(18, false); ctx.textAlign = "left"; ctx.fillText("Pago", M, y); ctx.textAlign = "right"; ctx.fillText(money(doc.paid_amount), WIDTH - M, y); y += lh(18); }
+		if (cfg.footer) { hr(); String(cfg.footer).split("\n").forEach(l => center(l, 20, true)); }
 		y += PAD;
 
 		const h = Math.min(Math.ceil(y), MAXH);
@@ -83,7 +139,6 @@ window.POSPrint = (function () {
 	}
 	async function writeChunks(d) { for (let i = 0; i < d.length; i += 180) { await writeChar.writeValueWithoutResponse(d.slice(i, i + 180)); await sleep(25); } }
 
-	// imprime doc; onStatus(txt) opcional para feedback
 	async function printReceipt(doc, cfg, onStatus) {
 		cfg = cfg || loadCfg();
 		const st = onStatus || function () {};
@@ -91,7 +146,7 @@ window.POSPrint = (function () {
 		st("A ligar…"); await connect();
 		st("A imprimir…");
 		const dens = Math.max(0, Math.min(2, Number(cfg.density)));
-		await writeChunks(new Uint8Array([0x10, 0xFF, 0x10, 0x00, dens]));  // densidade
+		await writeChunks(new Uint8Array([0x10, 0xFF, 0x10, 0x00, dens]));
 		const r = renderReceipt(doc, cfg);
 		done = false;
 		await writeChunks(packJob(r.bits, r.h));
@@ -113,5 +168,5 @@ window.POSPrint = (function () {
 		};
 	}
 
-	return { loadCfg, saveCfg, renderReceipt, printReceipt, money, sampleDoc, DEFAULT_CFG, hasBluetooth: !!navigator.bluetooth };
+	return { loadCfg, saveCfg, setLogo, renderReceipt, printReceipt, money, sampleDoc, DEFAULT_CFG, hasBluetooth: !!navigator.bluetooth };
 })();

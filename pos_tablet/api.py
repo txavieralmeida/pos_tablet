@@ -52,6 +52,19 @@ def _get_pos_profile(required=True):
 	return frappe.get_doc("POS Profile", name)
 
 
+def _print_logo(profile):
+	"""Logo do letter head usado na impressão da fatura (POS profile → empresa → default)."""
+	lh = getattr(profile, "letter_head", None) if profile else None
+	if not lh and profile:
+		lh = frappe.db.get_value("Company", profile.company, "default_letter_head")
+	if not lh:
+		lh = frappe.db.get_value("Letter Head", {"is_default": 1}, "name")
+	img = frappe.db.get_value("Letter Head", lh, "image") if lh else None
+	if not img and profile:
+		img = frappe.db.get_value("Company", profile.company, "company_logo")
+	return _image_data_uri(img) if img else None
+
+
 def _groups_with_descendants(groups):
 	"""Expande cada grupo de itens para incluir os seus subgrupos (nested set),
 	tal como o POS do ERPNext faz."""
@@ -110,7 +123,13 @@ def get_pos_items():
 				"Configura os grupos de itens do perfil ou adiciona artigos vendáveis." % profile.name
 			),
 		}
-	return {"profile": profile.name, "company": profile.company, "currency": profile.currency, "items": items}
+	return {
+		"profile": profile.name,
+		"company": profile.company,
+		"currency": profile.currency,
+		"logo": _print_logo(profile),
+		"items": items,
+	}
 
 
 @frappe.whitelist()

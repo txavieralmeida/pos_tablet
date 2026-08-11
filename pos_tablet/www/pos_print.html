@@ -137,6 +137,7 @@ if(!POSPrint.hasBluetooth){ document.getElementById('test').style.display='none'
   fillControls();
   // tornar a pré-visualização realista com empresa + artigos reais
   try{ const resp=await api('pos_tablet.api.get_pos_items');
+    try{ await POSPrint.setLogo(resp && resp.logo); }catch(e){}
     if(resp && resp.items && resp.items.length){
       const items = resp.items.slice(0,3).map(it=>({item_name:it.item_name, qty:2, rate:it.rate, amount:2*(it.rate||0)}));
       SAMPLE = POSPrint.sampleDoc(resp.company, items);

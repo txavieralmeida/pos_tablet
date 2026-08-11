@@ -140,9 +140,10 @@ document.getElementById('fs').addEventListener('click',()=>{
 });
 
 // ---------- grelha ----------
+function showGridMsg(msg){ document.getElementById('grid').innerHTML='<div class="empty">'+escapeHtml(msg)+'</div>'; }
 function renderGrid(){
   const g=document.getElementById('grid'); g.innerHTML='';
-  if(!ITEMS.length){ g.innerHTML='<div class="empty">Sem artigos no grupo Festa.</div>'; return; }
+  if(!ITEMS.length){ g.innerHTML='<div class="empty">Sem artigos disponíveis.</div>'; return; }
   ITEMS.forEach(it=>{
     const c=document.createElement('div'); c.className='card';
     const thumb = it.image ? '<img src="'+escapeHtml(it.image)+'" alt="" onerror="this.parentNode.innerHTML=\'<span class=&quot;ph&quot;>'+escapeHtml((it.item_name||'?')[0])+'</span>\'">'
@@ -297,8 +298,14 @@ document.getElementById('btn-print').addEventListener('click',printLast);
 if(!navigator.bluetooth){ document.getElementById('btn-print').style.display='none'; }
 updateCashUI();
 (async()=>{
-  try{ const resp=await api('pos_tablet.api.get_pos_items'); ITEMS=(resp&&resp.items)||[]; renderGrid(); }
-  catch(e){ document.getElementById('grid').innerHTML='<div class="empty">Erro a carregar: '+escapeHtml(e.message||e)+'</div>'; }
+  try{
+    const resp=await api('pos_tablet.api.get_pos_items');
+    if(resp && resp.error==='no_pos_profile'){ showGridMsg('⚠ '+resp.message); return; }
+    ITEMS=(resp&&resp.items)||[];
+    renderGrid();
+    if(resp && resp.error==='no_items'){ showGridMsg('⚠ '+resp.message); }
+  }
+  catch(e){ showGridMsg('Erro a carregar: '+(e.message||e)); }
   try{ const u=await api('frappe.auth.get_logged_user'); document.getElementById('who').textContent=u||''; }catch(e){}
 })();
 </script>

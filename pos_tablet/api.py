@@ -26,11 +26,18 @@ def _image_data_uri(image):
 		return image
 
 
-def _get_pos_profile():
+NO_PROFILE_MSG = (
+	"Não existe nenhum perfil de POS default. "
+	"Cria um perfil (POS Profile) e marca o teu utilizador como default."
+)
+
+
+def _get_pos_profile(required=True):
 	"""Perfil de POS default do utilizador atual (como o ERPNext resolve):
 	1) perfil onde o utilizador está marcado como default;
 	2) qualquer perfil onde o utilizador está listado;
-	3) primeiro perfil ativo."""
+	3) primeiro perfil ativo.
+	Se não houver nenhum: lança erro (required=True) ou devolve None (required=False)."""
 	user = frappe.session.user
 	name = frappe.db.get_value("POS Profile User", {"user": user, "default": 1}, "parent")
 	if not name:
@@ -39,7 +46,9 @@ def _get_pos_profile():
 		rows = frappe.get_all("POS Profile", filters={"disabled": 0}, limit=1)
 		name = rows[0].name if rows else None
 	if not name:
-		frappe.throw("Não há perfil de POS configurado.")
+		if required:
+			frappe.throw(NO_PROFILE_MSG)
+		return None
 	return frappe.get_doc("POS Profile", name)
 
 
@@ -63,10 +72,13 @@ def _groups_with_descendants(groups):
 @frappe.whitelist()
 def get_pos_items():
 	"""Artigos vendáveis do perfil de POS default (filtrados pelos grupos do perfil,
-	ou todos se o perfil não restringir), com preço da lista do perfil e imagem."""
-	profile = _get_pos_profile()
-	price_list = profile.selling_price_list or PRICE_LIST
+	ou todos se o perfil não restringir), com preço da lista do perfil e imagem.
+	Devolve {error, message} quando não há perfil default ou não há artigos."""
+	profile = _get_pos_profile(required=False)
+	if not profile:
+		return {"error": "no_pos_profile", "message": NO_PROFILE_MSG}
 
+	price_list = profile.selling_price_list or PRICE_LIST
 	filters = {"disabled": 0, "is_sales_item": 1}
 	groups = [g.item_group for g in (profile.item_groups or [])]
 	if groups:
@@ -87,6 +99,17 @@ def get_pos_items():
 	for i in items:
 		i["rate"] = prices.get(i.item_code, 0) or 0
 		i["image"] = _image_data_uri(i.get("image"))
+
+	if not items:
+		return {
+			"error": "no_items",
+			"profile": profile.name,
+			"items": [],
+			"message": (
+				"O perfil de POS '%s' não tem artigos disponíveis. "
+				"Configura os grupos de itens do perfil ou adiciona artigos vendáveis." % profile.name
+			),
+		}
 	return {"profile": profile.name, "currency": profile.currency, "items": items}
 
 

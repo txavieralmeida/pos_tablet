@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POS — Configurar impressão</title>
+<style>
+  :root{--bg:#12100e;--panel:#1b1815;--line:#2c2723;--ink:#f5efe6;--muted:#b3a99b;--accent:#e3122e;--accent2:#f4c20d;--ok:#2fa96b;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100dvh;}
+  header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--line);}
+  header h1{font-size:17px;margin:0;flex:1;font-weight:700;}
+  header a{color:var(--accent2);text-decoration:none;font-size:14px;font-weight:600;}
+  .wrap{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start;}
+  .col{flex:1;min-width:280px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+  .card h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px;}
+  .field input[type=text],.field textarea,.field select{width:100%;padding:11px;border-radius:10px;border:1px solid var(--line);background:#26221e;color:var(--ink);font-size:15px;}
+  .field textarea{resize:vertical;min-height:52px;}
+  .row{display:flex;gap:16px;flex-wrap:wrap;}
+  .row .field{flex:1;min-width:120px;}
+  .check{display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;font-size:15px;}
+  .check input{width:22px;height:22px;}
+  .rangeval{color:var(--accent2);font-weight:700;}
+  .btns{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;}
+  .btn{flex:1;min-width:130px;padding:14px;border:none;border-radius:12px;font-weight:800;font-size:15px;cursor:pointer;}
+  .btn-save{background:var(--ok);color:#fff;}
+  .btn-print{background:var(--accent);color:#fff;}
+  .btn[disabled]{opacity:.45;pointer-events:none;}
+  .paperwrap{position:sticky;top:16px;display:flex;flex-direction:column;align-items:center;gap:8px;}
+  .paperlabel{font-size:12px;color:var(--muted);}
+  .paper{background:#fff;padding:10px;border-radius:6px;box-shadow:0 10px 30px rgba(0,0,0,.5);}
+  .paper canvas{display:block;width:320px;height:auto;image-rendering:pixelated;image-rendering:crisp-edges;}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px;}
+  .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#000;color:#fff;padding:11px 16px;border-radius:10px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;}
+  .toast.show{opacity:.96;}
+</style>
+</head>
+<body>
+<header>
+  <h1>🖨️ Configurar impressão</h1>
+  <a href="/pos">← Voltar ao POS</a>
+</header>
+<div class="wrap">
+  <div class="col">
+    <div class="card">
+      <h2>Definições do recibo</h2>
+      <div class="field">
+        <label>Linhas de cabeçalho (opcional — ex.: morada, NIF)</label>
+        <textarea id="header" placeholder="uma linha por cada linha do recibo"></textarea>
+      </div>
+      <div class="field">
+        <label>Rodapé</label>
+        <input type="text" id="footer" placeholder="ex.: Obrigado!">
+      </div>
+      <label class="check"><input type="checkbox" id="showInvoice"> Mostrar nº do documento</label>
+      <label class="check"><input type="checkbox" id="showDate"> Mostrar data/hora</label>
+      <div class="row">
+        <div class="field">
+          <label>Densidade (escuridão)</label>
+          <select id="density">
+            <option value="0">Clara</option>
+            <option value="1">Normal</option>
+            <option value="2">Escura</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tamanho do texto — <span class="rangeval" id="scaleval">1.0×</span></label>
+          <input type="range" id="scale" min="0.8" max="1.4" step="0.1" value="1" style="width:100%">
+        </div>
+      </div>
+      <div class="btns">
+        <button class="btn btn-save" id="save">Guardar</button>
+        <button class="btn btn-print" id="test">🖨️ Imprimir teste</button>
+      </div>
+      <div class="hint">As definições ficam guardadas neste dispositivo e são usadas no POS ao imprimir.</div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="paperwrap">
+      <div class="paperlabel">Pré-visualização (igual ao que sai na impressora)</div>
+      <div class="paper"><div id="preview"></div></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/assets/pos_tablet/js/pos_print.js"></script>
+<script>
+const CSRF="{{ csrf_token }}";
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2200);}
+async function api(method){ const r=await fetch('/api/method/'+method,{credentials:'include'}); const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error((j&&(j.exc_type||j.message))||('HTTP '+r.status)); return j.message; }
+
+let cfg = POSPrint.loadCfg();
+let SAMPLE = POSPrint.sampleDoc();
+
+function fillControls(){
+  document.getElementById('header').value = cfg.header||'';
+  document.getElementById('footer').value = cfg.footer||'';
+  document.getElementById('showInvoice').checked = !!cfg.showInvoice;
+  document.getElementById('showDate').checked = !!cfg.showDate;
+  document.getElementById('density').value = String(cfg.density);
+  document.getElementById('scale').value = String(cfg.scale);
+  document.getElementById('scaleval').textContent = Number(cfg.scale).toFixed(1)+'×';
+}
+function readControls(){
+  cfg.header = document.getElementById('header').value;
+  cfg.footer = document.getElementById('footer').value;
+  cfg.showInvoice = document.getElementById('showInvoice').checked;
+  cfg.showDate = document.getElementById('showDate').checked;
+  cfg.density = parseInt(document.getElementById('density').value,10);
+  cfg.scale = parseFloat(document.getElementById('scale').value);
+  document.getElementById('scaleval').textContent = Number(cfg.scale).toFixed(1)+'×';
+}
+function renderPreview(){
+  const r = POSPrint.renderReceipt(SAMPLE, cfg);
+  const box = document.getElementById('preview'); box.innerHTML=''; box.appendChild(r.canvas);
+}
+['header','footer','showInvoice','showDate','density','scale'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input', ()=>{ readControls(); renderPreview(); });
+  el.addEventListener('change', ()=>{ readControls(); renderPreview(); });
+});
+document.getElementById('save').addEventListener('click', ()=>{ readControls(); POSPrint.saveCfg(cfg); toast('✓ Definições guardadas'); });
+document.getElementById('test').addEventListener('click', async ()=>{
+  const b=document.getElementById('test');
+  if(!POSPrint.hasBluetooth){ toast('Este browser não suporta Bluetooth'); return; }
+  readControls(); b.disabled=true; const o=b.textContent;
+  try{ await POSPrint.printReceipt(SAMPLE, cfg, s=>b.textContent=s); }
+  catch(e){ toast('Impressora: '+(e.message||e)); }
+  setTimeout(()=>{b.textContent=o;b.disabled=false;},2500);
+});
+if(!POSPrint.hasBluetooth){ document.getElementById('test').style.display='none'; }
+
+(async()=>{
+  fillControls();
+  // tornar a pré-visualização realista com empresa + artigos reais
+  try{ const resp=await api('pos_tablet.api.get_pos_items');
+    if(resp && resp.items && resp.items.length){
+      const items = resp.items.slice(0,3).map(it=>({item_name:it.item_name, qty:2, rate:it.rate, amount:2*(it.rate||0)}));
+      SAMPLE = POSPrint.sampleDoc(resp.company, items);
+    } else if(resp && resp.company){ SAMPLE = POSPrint.sampleDoc(resp.company); }
+  }catch(e){}
+  renderPreview();
+})();
+</script>
+</body>
+</html>

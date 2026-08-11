@@ -110,7 +110,7 @@ def get_pos_items():
 				"Configura os grupos de itens do perfil ou adiciona artigos vendáveis." % profile.name
 			),
 		}
-	return {"profile": profile.name, "currency": profile.currency, "items": items}
+	return {"profile": profile.name, "company": profile.company, "currency": profile.currency, "items": items}
 
 
 @frappe.whitelist()

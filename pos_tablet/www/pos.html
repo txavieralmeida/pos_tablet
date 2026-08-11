@@ -74,6 +74,7 @@
 <header>
   <h1>🛒 POS</h1>
   <span class="who" id="who"></span>
+  <a class="iconbtn" href="/pos-print" title="Configurar impressão" style="text-decoration:none;display:flex;align-items:center;justify-content:center;">⚙️</a>
   <button class="iconbtn" id="fs" title="Ecrã inteiro">⛶</button>
 </header>
 <main>
@@ -113,6 +114,7 @@
 </main>
 <div class="toast" id="toast"></div>
 
+<script src="/assets/pos_tablet/js/pos_print.js"></script>
 <script>
 const CSRF = "{{ csrf_token }}";
 const money = n => (Number(n)||0).toFixed(2).replace('.',',') + ' €';
@@ -243,59 +245,23 @@ function checkout(){
 }
 document.getElementById('checkout').addEventListener('click',checkout);
 
-// ---------- impressora Bluetooth (Tronic 5890 / Mini Pocket) ----------
-const P={SERVICE:0xff00,CHAR_WRITE:0xff02,CHAR_NOTIFY:0xff01,WIDTH:384,BPR:48,device:null,server:null,writeChar:null,done:false};
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function connectPrinter(){
-  if(P.server&&P.device&&P.device.gatt.connected&&P.writeChar) return;
-  P.device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:"Mini Pocket"}],optionalServices:[P.SERVICE]});
-  P.device.addEventListener('gattserverdisconnected',()=>{P.server=null;P.writeChar=null;});
-  P.server=await P.device.gatt.connect();
-  const svc=await P.server.getPrimaryService(P.SERVICE);
-  P.writeChar=await svc.getCharacteristic(P.CHAR_WRITE);
-  const nt=await svc.getCharacteristic(P.CHAR_NOTIFY);
-  await nt.startNotifications();
-  nt.addEventListener('characteristicvaluechanged',e=>{const v=new Uint8Array(e.target.value.buffer); if(v.length>=3&&v[0]===0xAA&&v[1]===0x0D&&v[2]===0x0A)P.done=true;});
-}
-async function writeChunks(d){ for(let i=0;i<d.length;i+=180){ await P.writeChar.writeValueWithoutResponse(d.slice(i,i+180)); await sleep(25);} }
-function packJob(bits,h){ const BPR=P.BPR,W=P.WIDTH,data=new Uint8Array(BPR*h);
-  for(let y=0;y<h;y++)for(let x=0;x<W;x++)if(bits[y*W+x])data[y*BPR+(x>>3)]|=0x80>>(x&7);
-  const head=[0x1D,0x76,0x30,0x00,BPR,0x00,h&0xFF,h>>8],job=new Uint8Array(16+8+data.length+7);
-  job.set([0x10,0xFF,0xF1,0x03],0); job.set(head,16); job.set(data,24);
-  job.set([0x1B,0x4A,0x50],24+data.length); job.set([0x10,0xFF,0xF1,0x45],27+data.length); return job; }
-function renderReceipt(doc){ const W=P.WIDTH,MAXH=4000,PAD=8,c=document.createElement('canvas'); c.width=W;c.height=MAXH;
-  const ctx=c.getContext('2d'); ctx.fillStyle='#fff';ctx.fillRect(0,0,W,MAXH);ctx.fillStyle='#000';ctx.textBaseline='top'; let y=PAD;
-  const ce=(t,s,b)=>{ctx.font=(b?'bold ':'')+s+'px monospace';ctx.textAlign='center';ctx.fillText(t||'',W/2,y);y+=s+5;};
-  const lf=(t,s,b)=>{ctx.font=(b?'bold ':'')+s+'px monospace';ctx.textAlign='left';ctx.fillText(t||'',6,y);y+=s+5;};
-  const lr=(l,r,s,b)=>{ctx.font=(b?'bold ':'')+s+'px monospace';ctx.textAlign='left';ctx.fillText(l||'',6,y);ctx.textAlign='right';ctx.fillText(r||'',W-6,y);y+=s+5;};
-  const hr=()=>{y+=3;ctx.fillRect(6,y,W-12,2);y+=9;};
-  ce(doc.company,26,true); ce('Recibo Simplificado',18,false); hr();
-  lf(doc.name,16,false); lf(((doc.posting_date||'')+' '+(doc.posting_time||'')).trim(),16,false); hr();
-  (doc.items||[]).forEach(it=>{ lr((it.qty||0)+'x '+String(it.item_name||'').substring(0,20), money(it.amount!=null?it.amount:(it.qty*it.rate)),20,false); });
-  hr(); lr('TOTAL',money(doc.grand_total),28,true);
-  if(doc.paid_amount!=null) lr('Pago',money(doc.paid_amount),18,false); hr(); ce('Obrigado!',20,true); y+=PAD;
-  const h=Math.min(Math.ceil(y),MAXH),img=ctx.getImageData(0,0,W,h).data,bits=new Uint8Array(W*h);
-  for(let i=0;i<W*h;i++){const lum=img[i*4]*0.299+img[i*4+1]*0.587+img[i*4+2]*0.114;bits[i]=lum<128?1:0;} return {bits,h};
-}
+// ---------- impressora Bluetooth (via pos_print.js partilhado) ----------
 async function printLast(){
   const btn=document.getElementById('btn-print');
-  if(!navigator.bluetooth){ toast('Este browser não suporta Bluetooth'); return; }
+  if(!POSPrint.hasBluetooth){ toast('Este browser não suporta Bluetooth'); return; }
   let doc=lastSaleData;
   const orig=btn.textContent; btn.disabled=true;
   try{
     if(!doc && lastSalePromise){ btn.textContent='A registar…'; doc=await lastSalePromise; }
     if(!doc){ btn.textContent=orig; btn.disabled=false; return; }
-    btn.textContent='A ligar…'; await connectPrinter();
-    btn.textContent='A imprimir…'; const r=renderReceipt(doc); P.done=false; await writeChunks(packJob(r.bits,r.h));
-    let w=0; while(!P.done&&w<20000){ await sleep(250); w+=250; }
-    btn.textContent=P.done?'Impresso ✓':'Enviado';
+    await POSPrint.printReceipt(doc, null, s=>{ btn.textContent=s; });
   }catch(e){ btn.textContent='Erro'; toast('Impressora: '+(e.message||e)); }
   setTimeout(()=>{btn.textContent=orig;btn.disabled=false;},2500);
 }
 document.getElementById('btn-print').addEventListener('click',printLast);
 
 // ---------- init ----------
-if(!navigator.bluetooth){ document.getElementById('btn-print').style.display='none'; }
+if(!POSPrint.hasBluetooth){ document.getElementById('btn-print').style.display='none'; }
 updateCashUI();
 (async()=>{
   try{
